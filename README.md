@@ -118,29 +118,35 @@ npm start /ext
 | 브라우저 | 기존 Chrome | 별도 Chrome |
 | 추천 용도 | 로그인 필요 서비스 | 일반 웹 탐색 |
 
-### 병렬 처리 모드 (Multi-Profile)
+### 병렬 처리 모드 (Multi-Browser)
 
-여러 Chrome 프로필로 동시에 작업을 실행합니다. 각 프로필은 별도의 로그인 상태를 유지합니다.
+여러 브라우저로 동시에 작업을 실행합니다.
 
 ```bash
+# 익명 브라우저 (로그인 없음) - 숫자로 개수 지정
+npm start '/parallel 3 "구글에서 날씨 검색" "네이버에서 뉴스 검색" "다음에서 영화 검색"'
+
+# 프로필 브라우저 (로그인 유지) - 프로필명으로 지정
+npm start '/parallel "Default,Profile 1" "네이버 메일 확인" "Gmail 확인"'
+
 # 프로필 목록 확인
 npm start /profiles
-
-# 2개 프로필로 2개 작업 병렬 실행
-npm start '/parallel "Default,Profile 1" "네이버에서 날씨 검색" "구글에서 뉴스 검색"'
-
-# 3개 프로필로 6개 작업 병렬 실행 (라운드 로빈 배분)
-npm start '/parallel "Default,Profile 1,Profile 2" "작업1" "작업2" "작업3" "작업4" "작업5" "작업6"'
 ```
+
+#### 익명 vs 프로필 모드
+
+| 모드 | 사용법 | 로그인 | 용도 |
+|------|--------|--------|------|
+| 익명 | `/parallel 3 "작업"...` | 없음 | 단순 검색, 크롤링 |
+| 프로필 | `/parallel "Profile1,Profile2" "작업"...` | 유지 | 로그인 필요 서비스 |
 
 #### 병렬 처리 특징
 
-- 각 프로필별로 독립된 Chrome 인스턴스 실행
-- 작업 수 > 프로필 수인 경우 라운드 로빈으로 자동 배분
-- 모든 작업이 동시에 실행되어 처리 시간 단축
-- 각 프로필의 로그인 상태 유지
+- 각 브라우저가 독립적으로 동시 실행
+- 작업 수 > 브라우저 수인 경우 라운드 로빈 배분
+- 처리 시간 대폭 단축
 
-**주의**: 병렬 실행 전 해당 프로필을 사용하는 Chrome을 종료해야 합니다.
+**주의**: 프로필 모드는 해당 프로필 사용 중인 Chrome을 종료해야 합니다.
 
 ### 모델 관리
 
@@ -196,7 +202,8 @@ npm start '/ollama-url http://192.168.1.100:11434/v1'
 | 명령어 | 설명 | 예시 |
 |--------|------|------|
 | `/ext` 또는 `/extension` | Extension 모드로 시작 | `npm start /ext` |
-| `/parallel` | 멀티 프로필 병렬 실행 | `npm start '/parallel "Default,Profile 1" "작업1" "작업2"'` |
+| `/parallel <N>` | 익명 브라우저 N개 병렬 | `npm start '/parallel 3 "작업1" "작업2" "작업3"'` |
+| `/parallel "profiles"` | 프로필 브라우저 병렬 | `npm start '/parallel "Default,Profile 1" "작업1" "작업2"'` |
 | `/profiles` | Chrome 프로필 목록 | `npm start /profiles` |
 | `/models` | 사용 가능한 모델 목록 | `npm start /models` |
 | `/set <provider> <model>` | 모델 변경 | `npm start '/set google gemini-2.5-flash'` |

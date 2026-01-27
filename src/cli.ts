@@ -249,6 +249,91 @@ async function startParallelBrowsers(profiles: string[]): Promise<ParallelBrowse
   return browsers;
 }
 
+// 익명 병렬 브라우저 시작 (로그인 없는 새 브라우저)
+async function startAnonymousParallelBrowsers(count: number): Promise<ParallelBrowser[]> {
+  const executablePath = findChromeExecutable();
+  if (!executablePath) throw new Error("Chrome not found");
+
+  const browsers: ParallelBrowser[] = [];
+
+  console.log(`\n${c.cyan}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}`);
+  console.log(`${c.bright}🚀 익명 브라우저 ${count}개 시작${c.reset}`);
+  console.log(`${c.cyan}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}\n`);
+
+  for (let i = 0; i < count; i++) {
+    const cdpPort = 9500 + i;
+    const tempDir = path.join(os.tmpdir(), `pi-browser-${Date.now()}-${i}`);
+    fs.mkdirSync(tempDir, { recursive: true });
+
+    console.log(`${c.dim}  [${i + 1}/${count}] Browser ${i + 1} 시작 중... (포트 ${cdpPort})${c.reset}`);
+
+    const args = [
+      `--remote-debugging-port=${cdpPort}`,
+      `--user-data-dir=${tempDir}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-sync",
+      "--disable-extensions",
+      "about:blank",
+    ];
+
+    const proc = spawn(executablePath, args, {
+      detached: false,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    const cdpUrl = `http://127.0.0.1:${cdpPort}`;
+
+    // CDP 준비 대기
+    let cdpReady = false;
+    for (let j = 0; j < 30; j++) {
+      try {
+        const res = await fetch(`${cdpUrl}/json/version`, { signal: AbortSignal.timeout(500) });
+        if (res.ok) {
+          cdpReady = true;
+          break;
+        }
+      } catch {}
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    if (!cdpReady) {
+      console.log(`${c.red}  ✗ CDP 연결 실패: Browser ${i + 1}${c.reset}`);
+      proc.kill();
+      continue;
+    }
+
+    try {
+      const browserInstance = await chromium.connectOverCDP(cdpUrl);
+      const contexts = browserInstance.contexts();
+      const ctx = contexts[0] ?? (await browserInstance.newContext());
+      const pages = ctx.pages();
+      const page = pages[0] ?? (await ctx.newPage());
+
+      const pb: ParallelBrowser = {
+        id: i,
+        profile: `Browser ${i + 1}`,
+        process: proc,
+        browser: browserInstance,
+        context: ctx,
+        page,
+        cdpPort,
+      };
+
+      browsers.push(pb);
+      parallelBrowsers.push(pb);
+
+      console.log(`${c.green}  ✓ Browser ${i + 1} 준비 완료${c.reset}`);
+    } catch (error) {
+      console.log(`${c.red}  ✗ 브라우저 연결 실패: Browser ${i + 1} - ${(error as Error).message}${c.reset}`);
+      proc.kill();
+    }
+  }
+
+  console.log(`\n${c.green}✓ ${browsers.length}개 브라우저 준비 완료${c.reset}\n`);
+  return browsers;
+}
+
 // 병렬 브라우저 종료
 async function stopParallelBrowsers(): Promise<void> {
   for (const pb of parallelBrowsers) {
@@ -1483,11 +1568,14 @@ async function main() {
     if (arg === "/parallel") {
       // 사용법 안내
       console.log(`\n${c.cyan}병렬 브라우저 모드${c.reset}`);
-      console.log(`${c.dim}여러 프로필로 동시에 작업을 실행합니다.${c.reset}\n`);
+      console.log(`${c.dim}여러 브라우저로 동시에 작업을 실행합니다.${c.reset}\n`);
       console.log(`${c.yellow}사용법:${c.reset}`);
-      console.log(`  npm start '/parallel "Profile 1,Profile 2,Profile 3" "작업1" "작업2" "작업3"'`);
-      console.log(`\n${c.dim}프로필 목록은 쉼표로 구분합니다.${c.reset}`);
-      console.log(`${c.dim}작업 수 > 프로필 수인 경우 라운드 로빈으로 배분됩니다.${c.reset}\n`);
+      console.log(`  ${c.green}# 익명 브라우저 (로그인 없음)${c.reset}`);
+      console.log(`  npm start '/parallel 3 "작업1" "작업2" "작업3"'`);
+      console.log(`\n  ${c.green}# 프로필 브라우저 (로그인 유지)${c.reset}`);
+      console.log(`  npm start '/parallel "Profile 1,Profile 2" "작업1" "작업2"'`);
+      console.log(`\n${c.dim}숫자: 익명 브라우저 개수, 따옴표: 프로필 목록${c.reset}`);
+      console.log(`${c.dim}작업 수 > 브라우저 수인 경우 라운드 로빈으로 배분됩니다.${c.reset}\n`);
 
       const profiles = getChromeProfiles();
       console.log(`${c.cyan}사용 가능한 프로필:${c.reset}`);
@@ -1499,14 +1587,54 @@ async function main() {
       process.exit(0);
     }
 
-    // /parallel "profiles" "task1" "task2" ... 형식
+    // /parallel 처리
     if (arg.startsWith("/parallel ")) {
       const parallelArgs = arg.slice(10).trim();
-      // 첫 번째 따옴표 그룹은 프로필 목록, 나머지는 작업
+
+      // 숫자로 시작하면 익명 브라우저 모드
+      const countMatch = parallelArgs.match(/^(\d+)\s+(.+)$/);
+      if (countMatch) {
+        const count = parseInt(countMatch[1], 10);
+        const tasksPart = countMatch[2];
+        const taskMatches = tasksPart.match(/"[^"]+"/g);
+
+        if (!taskMatches || taskMatches.length === 0) {
+          console.log(`${c.red}사용법: /parallel 3 "작업1" "작업2" "작업3"${c.reset}`);
+          process.exit(1);
+        }
+
+        const tasks = taskMatches.map((t) => t.replace(/"/g, ""));
+
+        console.log(`${c.cyan}익명 브라우저: ${count}개${c.reset}`);
+        console.log(`${c.cyan}작업 수: ${tasks.length}${c.reset}\n`);
+
+        try {
+          const model = resolveModel(config);
+          const isOllama = config.provider === "ollama";
+
+          const browsers = await startAnonymousParallelBrowsers(count);
+
+          if (browsers.length === 0) {
+            console.log(`${c.red}브라우저를 시작할 수 없습니다.${c.reset}`);
+            process.exit(1);
+          }
+
+          await runParallelAgents(browsers, tasks, model, isOllama);
+          await stopParallelBrowsers();
+        } catch (error) {
+          console.log(`${c.red}Error: ${(error as Error).message}${c.reset}`);
+          await stopParallelBrowsers();
+        }
+        process.exit(0);
+      }
+
+      // 프로필 모드: "profiles" "task1" "task2" ...
       const matches = parallelArgs.match(/"[^"]+"/g);
 
       if (!matches || matches.length < 2) {
-        console.log(`${c.red}사용법: /parallel "프로필1,프로필2" "작업1" "작업2"${c.reset}`);
+        console.log(`${c.red}사용법:${c.reset}`);
+        console.log(`  ${c.dim}익명: /parallel 3 "작업1" "작업2"${c.reset}`);
+        console.log(`  ${c.dim}프로필: /parallel "Profile1,Profile2" "작업1" "작업2"${c.reset}`);
         process.exit(1);
       }
 
@@ -1658,11 +1786,13 @@ async function main() {
       // 병렬 실행 도움말
       if (trimmed === "/parallel") {
         console.log(`\n${c.cyan}병렬 브라우저 모드${c.reset}`);
-        console.log(`${c.dim}여러 프로필로 동시에 작업을 실행합니다.${c.reset}\n`);
+        console.log(`${c.dim}여러 브라우저로 동시에 작업을 실행합니다.${c.reset}\n`);
         console.log(`${c.yellow}사용법:${c.reset}`);
+        console.log(`  ${c.green}# 익명 브라우저 (로그인 없음)${c.reset}`);
+        console.log(`  /parallel 3 "작업1" "작업2" "작업3"`);
+        console.log(`\n  ${c.green}# 프로필 브라우저 (로그인 유지)${c.reset}`);
         console.log(`  /parallel "Profile 1,Profile 2" "작업1" "작업2"`);
-        console.log(`\n${c.dim}프로필 목록은 쉼표로 구분합니다.${c.reset}`);
-        console.log(`${c.dim}작업 수 > 프로필 수인 경우 라운드 로빈으로 배분됩니다.${c.reset}\n`);
+        console.log(`\n${c.dim}숫자: 익명 브라우저 개수, 따옴표: 프로필 목록${c.reset}\n`);
 
         const profiles = getChromeProfiles();
         console.log(`${c.cyan}사용 가능한 프로필:${c.reset}`);
@@ -1678,10 +1808,50 @@ async function main() {
       // 병렬 실행
       if (trimmed.startsWith("/parallel ")) {
         const parallelArgs = trimmed.slice(10).trim();
+
+        // 숫자로 시작하면 익명 브라우저 모드
+        const countMatch = parallelArgs.match(/^(\d+)\s+(.+)$/);
+        if (countMatch) {
+          const count = parseInt(countMatch[1], 10);
+          const tasksPart = countMatch[2];
+          const taskMatches = tasksPart.match(/"[^"]+"/g);
+
+          if (!taskMatches || taskMatches.length === 0) {
+            console.log(`${c.red}사용법: /parallel 3 "작업1" "작업2"${c.reset}`);
+            prompt();
+            return;
+          }
+
+          const tasks = taskMatches.map((t) => t.replace(/"/g, ""));
+
+          try {
+            const model = resolveModel(config);
+            const isOllama = config.provider === "ollama";
+
+            const browsers = await startAnonymousParallelBrowsers(count);
+
+            if (browsers.length > 0) {
+              await runParallelAgents(browsers, tasks, model, isOllama);
+            } else {
+              console.log(`${c.red}브라우저를 시작할 수 없습니다.${c.reset}`);
+            }
+
+            await stopParallelBrowsers();
+          } catch (error) {
+            console.log(`${c.red}Error: ${(error as Error).message}${c.reset}`);
+            await stopParallelBrowsers();
+          }
+          prompt();
+          return;
+        }
+
+        // 프로필 모드
         const matches = parallelArgs.match(/"[^"]+"/g);
 
         if (!matches || matches.length < 2) {
-          console.log(`${c.red}사용법: /parallel "프로필1,프로필2" "작업1" "작업2"${c.reset}`);
+          console.log(`${c.red}사용법:${c.reset}`);
+          console.log(`  ${c.dim}익명: /parallel 3 "작업1" "작업2"${c.reset}`);
+          console.log(`  ${c.dim}프로필: /parallel "Profile1,Profile2" "작업1"${c.reset}`);
           prompt();
           return;
         }
