@@ -191,6 +191,24 @@ const browserTools: Tool[] = [
       selector: Type.String({ description: "CSS selector or empty string for full page" }),
     }),
   },
+  {
+    name: "browser_wait",
+    description: "Wait for a condition: time, text to appear, text to disappear, or element",
+    parameters: Type.Object({
+      timeMs: Type.String({ description: "Wait time in milliseconds (e.g. 5000 for 5 seconds)" }),
+      text: Type.String({ description: "Wait for this text to appear on page" }),
+      textGone: Type.String({ description: "Wait for this text to disappear (e.g. Loading...)" }),
+      selector: Type.String({ description: "Wait for this element to be visible" }),
+    }),
+  },
+  {
+    name: "browser_download",
+    description: "Click a download button/link and save the file",
+    parameters: Type.Object({
+      selector: Type.String({ description: "Selector of download button/link to click" }),
+      filename: Type.String({ description: "Filename to save as (e.g. song.mp3)" }),
+    }),
+  },
 ];
 
 // ============================================================
@@ -309,6 +327,71 @@ async function executeBrowserTool(
       return { text: text.slice(0, 2000) };
     }
 
+    case "browser_wait": {
+      const timeMs = args.timeMs as string | undefined;
+      const text = args.text as string | undefined;
+      const textGone = args.textGone as string | undefined;
+      const selector = args.selector as string | undefined;
+      const results: string[] = [];
+
+      // 시간 대기
+      if (timeMs && parseInt(timeMs) > 0) {
+        const ms = Math.min(parseInt(timeMs), 60000); // 최대 60초
+        await page.waitForTimeout(ms);
+        results.push(`Waited ${ms}ms`);
+      }
+
+      // 텍스트 나타날 때까지 대기
+      if (text) {
+        await page.getByText(text).first().waitFor({ state: "visible", timeout: 30000 });
+        results.push(`Text "${text}" appeared`);
+      }
+
+      // 텍스트 사라질 때까지 대기
+      if (textGone) {
+        await page.getByText(textGone).first().waitFor({ state: "hidden", timeout: 60000 });
+        results.push(`Text "${textGone}" disappeared`);
+      }
+
+      // 요소 나타날 때까지 대기
+      if (selector) {
+        await page.locator(selector).first().waitFor({ state: "visible", timeout: 30000 });
+        results.push(`Element "${selector}" visible`);
+      }
+
+      return { text: results.length > 0 ? results.join(", ") : "Wait completed" };
+    }
+
+    case "browser_download": {
+      const selector = args.selector as string;
+      const filename = args.filename as string || "download";
+
+      // 다운로드 대기 설정
+      const downloadPromise = page.waitForEvent("download", { timeout: 120000 });
+
+      // 다운로드 버튼 클릭
+      const roleMatch = selector.match(/^(\w+):"([^"]*)"$/);
+      if (roleMatch) {
+        const [, role, name] = roleMatch;
+        await page.getByRole(role as any, { name, exact: false }).first().click();
+      } else if (selector.match(/^\w+$/)) {
+        await page.getByRole(selector as any).first().click();
+      } else {
+        await page.locator(selector).first().click();
+      }
+
+      // 다운로드 완료 대기
+      const download = await downloadPromise;
+      const suggestedName = download.suggestedFilename();
+
+      // 파일 저장
+      const downloadDir = path.join(os.homedir(), "Downloads");
+      const savePath = path.join(downloadDir, filename || suggestedName);
+      await download.saveAs(savePath);
+
+      return { text: `Downloaded: ${savePath} (${suggestedName})` };
+    }
+
     default:
       return { text: `Unknown tool: ${name}` };
   }
@@ -375,27 +458,35 @@ async function runAgent(mission: string, model: Model, isOllama: boolean = false
 
 TOOLS:
 - browser_navigate: {"url": "https://..."} - Go to URL
-- browser_snapshot: {} - Get list of elements with selectors
+- browser_snapshot: {} - Get interactive elements with selectors
 - browser_fill: {"selector": "...", "text": "..."} - Type text
 - browser_click: {"selector": "..."} - Click element
 - browser_press: {"key": "Enter"} - Press key
 - browser_screenshot: {} - Capture screen
 - browser_get_text: {"selector": ""} - Get page text
+- browser_wait: {"timeMs": "5000"} - Wait for time (ms)
+- browser_wait: {"text": "Complete"} - Wait for text to appear
+- browser_wait: {"textGone": "Loading..."} - Wait for text to disappear
+- browser_download: {"selector": "...", "filename": "file.mp3"} - Download file
 
 WORKFLOW:
 1. browser_navigate to the website
 2. browser_snapshot to find element selectors
-3. Use the EXACT selector from snapshot for browser_fill/browser_click
-4. browser_press key="Enter" to submit
-5. Report results
+3. browser_fill/browser_click using EXACT selector from snapshot
+4. browser_wait for loading/processing to complete
+5. browser_download if file needs to be saved
+6. Report results
 
-IMPORTANT:
-- ALWAYS use browser_snapshot first to get correct selectors
-- Use the selector value exactly as shown in snapshot output
-- Common selectors: textarea[name="q"] for Google search, #search_input for Naver
-- After filling, press Enter to submit
+SELECTOR FORMAT (from snapshot):
+- role:"name" format: textbox:"Search", button:"Submit"
+- Use EXACT value from snapshot output
 
-Be concise. Report final results clearly.`,
+AUTOMATION TIPS:
+- Wait for "Loading" text to disappear before next action
+- Wait for "Download" or "Complete" text before downloading
+- Use browser_wait with textGone for loading states
+
+Be concise. Complete the full task autonomously.`,
     messages: [{ role: "user", content: mission }],
     tools: browserTools,
   };
