@@ -78,6 +78,22 @@ function findChromeExecutable(): string | null {
 async function startBrowser(): Promise<void> {
   if (browser) return;
 
+  // 1. 먼저 기존 브라우저 연결 시도 (포트 9222)
+  const userCdpUrl = "http://127.0.0.1:9222";
+  try {
+    const res = await fetch(`${userCdpUrl}/json/version`, { signal: AbortSignal.timeout(1000) });
+    if (res.ok) {
+      console.log(`${c.green}✓ 기존 브라우저에 연결됨 (포트 9222)${c.reset}`);
+      browser = await chromium.connectOverCDP(userCdpUrl);
+      const contexts = browser.contexts();
+      context = contexts[0] ?? (await browser.newContext());
+      return;
+    }
+  } catch {
+    // 기존 브라우저 없음 - 새로 실행
+  }
+
+  // 2. 새 브라우저 실행
   const executablePath = findChromeExecutable();
   if (!executablePath) throw new Error("Chrome not found");
 
@@ -110,6 +126,7 @@ async function startBrowser(): Promise<void> {
     await new Promise((r) => setTimeout(r, 200));
   }
 
+  console.log(`${c.yellow}✓ 새 브라우저 실행됨${c.reset}`);
   chromeProcess = { process: proc, cdpUrl, userDataDir };
   browser = await chromium.connectOverCDP(cdpUrl);
   const contexts = browser.contexts();
@@ -117,8 +134,13 @@ async function startBrowser(): Promise<void> {
 }
 
 async function stopBrowser(): Promise<void> {
-  if (browser) {
+  // 기존 브라우저에 연결한 경우 닫지 않음
+  if (browser && chromeProcess) {
     await browser.close();
+    browser = null;
+    context = null;
+  } else if (browser) {
+    // 기존 브라우저는 연결만 해제
     browser = null;
     context = null;
   }
