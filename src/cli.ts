@@ -215,7 +215,18 @@ async function executeBrowserTool(
 
     case "browser_click": {
       const selector = args.selector as string;
-      await page.locator(selector).first().click();
+      // role:"name" 형식 처리
+      const roleMatch = selector.match(/^(\w+):"([^"]*)"$/);
+      if (roleMatch) {
+        const [, role, name] = roleMatch;
+        await page.getByRole(role as any, { name, exact: false }).first().click();
+      } else if (selector.match(/^\w+$/)) {
+        // role만 있는 경우
+        await page.getByRole(selector as any).first().click();
+      } else {
+        // 일반 CSS 셀렉터
+        await page.locator(selector).first().click();
+      }
       await page.waitForTimeout(1000);
       return { text: `Clicked: ${selector}` };
     }
@@ -223,7 +234,18 @@ async function executeBrowserTool(
     case "browser_fill": {
       const selector = args.selector as string;
       const text = args.text as string;
-      await page.locator(selector).first().fill(text);
+      // role:"name" 형식 처리
+      const roleMatch = selector.match(/^(\w+):"([^"]*)"$/);
+      if (roleMatch) {
+        const [, role, name] = roleMatch;
+        await page.getByRole(role as any, { name, exact: false }).first().fill(text);
+      } else if (selector.match(/^\w+$/)) {
+        // role만 있는 경우 (예: textbox, searchbox)
+        await page.getByRole(selector as any).first().fill(text);
+      } else {
+        // 일반 CSS 셀렉터
+        await page.locator(selector).first().fill(text);
+      }
       return { text: `Filled "${text}" into ${selector}` };
     }
 
@@ -245,43 +267,31 @@ async function executeBrowserTool(
     }
 
     case "browser_snapshot": {
-      const snapshot = await page.evaluate(`
-        (function() {
-          const results = [];
-          const selectors = ['input', 'textarea', 'button', 'a[href]', 'select', '[role="button"]'];
-          let idx = 0;
+      // Playwright의 ariaSnapshot 사용 (클로드봇 방식)
+      const ariaSnapshot = await page.locator(":root").ariaSnapshot();
 
-          selectors.forEach(sel => {
-            document.querySelectorAll(sel).forEach(el => {
-              const rect = el.getBoundingClientRect();
-              if (rect.width < 5 || rect.height < 5) return;
-              if (rect.top > window.innerHeight) return;
+      // 인터랙티브 요소만 추출
+      const lines = String(ariaSnapshot || "").split("\n");
+      const interactiveRoles = ["button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio"];
+      const results: string[] = [];
+      let refIdx = 1;
 
-              const tag = el.tagName.toLowerCase();
-              const role = el.role || (tag === 'a' ? 'link' : tag === 'button' ? 'button' : tag === 'input' ? 'textbox' : tag);
-              const name = el.ariaLabel || el.placeholder || el.textContent?.trim().slice(0, 50) || '';
+      for (const line of lines) {
+        const match = line.match(/^\s*-\s*(\w+)(?:\s+"([^"]*)")?/);
+        if (!match) continue;
 
-              let selector = '';
-              if (el.id) selector = '#' + el.id;
-              else if (el.name) selector = tag + '[name="' + el.name + '"]';
-              else if (el.placeholder) selector = tag + '[placeholder="' + el.placeholder + '"]';
-              else selector = tag + ':nth-of-type(' + (idx + 1) + ')';
+        const [, role, name] = match;
+        if (!interactiveRoles.includes(role.toLowerCase())) continue;
 
-              results.push({ role, name, selector });
-              idx++;
-            });
-          });
+        // ref 형식: role:name 또는 role만
+        const ref = name ? `${role}:"${name}"` : role;
+        results.push(`[e${refIdx}] ${role}${name ? ` "${name}"` : ""} → ${ref}`);
+        refIdx++;
 
-          return results.slice(0, 30);
-        })()
-      `);
+        if (refIdx > 20) break; // 최대 20개
+      }
 
-      const elements = snapshot as Array<{ role: string; name: string; selector: string }>;
-      const lines = elements.map(
-        (el, i) => `[e${i + 1}] ${el.role}${el.name ? ` "${el.name}"` : ""} → ${el.selector}`
-      );
-
-      return { text: `Page elements:\n${lines.join("\n")}` };
+      return { text: `Page elements (use ref value for selector):\n${results.join("\n")}` };
     }
 
     case "browser_scroll": {
@@ -361,27 +371,31 @@ async function runAgent(mission: string, model: Model, isOllama: boolean = false
   console.log(`${c.cyan}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${c.reset}\n`);
 
   const ctx: Context = {
-    systemPrompt: `You are a browser automation agent. Use the browser tools to complete the user's mission.
+    systemPrompt: `You are a browser automation agent. Complete the user's mission using browser tools.
 
-Available tools:
-- browser_navigate: Go to a URL
-- browser_click: Click an element
-- browser_fill: Fill text into an input
-- browser_press: Press a key (Enter, Tab, etc.)
-- browser_screenshot: Take a screenshot
-- browser_snapshot: Get list of interactive elements
-- browser_scroll: Scroll up/down
-- browser_get_text: Get page text
+TOOLS:
+- browser_navigate: {"url": "https://..."} - Go to URL
+- browser_snapshot: {} - Get list of elements with selectors
+- browser_fill: {"selector": "...", "text": "..."} - Type text
+- browser_click: {"selector": "..."} - Click element
+- browser_press: {"key": "Enter"} - Press key
+- browser_screenshot: {} - Capture screen
+- browser_get_text: {"selector": ""} - Get page text
 
-Workflow:
-1. Navigate to the target website
-2. Use browser_snapshot to see available elements
-3. Use browser_fill for text inputs, browser_click for buttons
-4. Use browser_screenshot to verify results
-5. Report findings to the user
+WORKFLOW:
+1. browser_navigate to the website
+2. browser_snapshot to find element selectors
+3. Use the EXACT selector from snapshot for browser_fill/browser_click
+4. browser_press key="Enter" to submit
+5. Report results
 
-Always start by navigating to the correct website if not already there.
-Be concise in your responses.`,
+IMPORTANT:
+- ALWAYS use browser_snapshot first to get correct selectors
+- Use the selector value exactly as shown in snapshot output
+- Common selectors: textarea[name="q"] for Google search, #search_input for Naver
+- After filling, press Enter to submit
+
+Be concise. Report final results clearly.`,
     messages: [{ role: "user", content: mission }],
     tools: browserTools,
   };
